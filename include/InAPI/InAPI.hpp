@@ -2,9 +2,11 @@
 #define INCLUDES
 
 #include <app.hpp>
+#include <error.hpp>
 #include <json.hpp>
+#include <request.hpp>
 #include <response.hpp>
 
-using json = nlohmann::json;
+using Json = nlohmann::json;
 
 #endif

@@ -1,4 +1,3 @@
-*.h
 *.exe
 /src/build
 *.cpp
