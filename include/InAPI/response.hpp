@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 #include <json.hpp>
 
 struct Response {
@@ -34,6 +35,72 @@ struct Response {
     std::string body;
     std::string content_type = "text/plain; charset=utf-8";
     std::map<std::string, std::string> headers;
+    std::vector<std::string> cookie_headers;
+
+    Response& header(const std::string& name, std::string value) {
+        headers[name] = std::move(value);
+        return *this;
+    }
+
+    Response& set_cookie(const std::string& name,
+                         std::string value,
+                         const std::string& path = "/",
+                         int max_age = -1,
+                         bool http_only = true,
+                         bool secure = false,
+                         const std::string& same_site = "Lax") {
+        std::ostringstream cookie;
+        cookie << safe_cookie_part(name) << "=" << safe_cookie_value(std::move(value));
+
+        if (!path.empty()) {
+            cookie << "; Path=" << safe_cookie_value(path);
+        }
+
+        if (max_age >= 0) {
+            cookie << "; Max-Age=" << max_age;
+        }
+
+        if (http_only) {
+            cookie << "; HttpOnly";
+        }
+
+        if (secure) {
+            cookie << "; Secure";
+        }
+
+        if (!same_site.empty()) {
+            cookie << "; SameSite=" << safe_cookie_value(same_site);
+        }
+
+        cookie_headers.push_back(cookie.str());
+        return *this;
+    }
+
+    Response& delete_cookie(const std::string& name, const std::string& path = "/") {
+        std::ostringstream cookie;
+        cookie << safe_cookie_part(name) << "=; Path=" << safe_cookie_value(path)
+               << "; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT";
+
+        cookie_headers.push_back(cookie.str());
+        return *this;
+    }
+
+    private:
+        static std::string safe_cookie_part(std::string value) {
+            value.erase(std::remove_if(value.begin(), value.end(), [](unsigned char symbol) {
+                return symbol <= 32 || symbol == 127 || symbol == ';' || symbol == ',' || symbol == '=';
+            }), value.end());
+
+            return value;
+        }
+
+        static std::string safe_cookie_value(std::string value) {
+            value.erase(std::remove_if(value.begin(), value.end(), [](unsigned char symbol) {
+                return symbol == '\r' || symbol == '\n' || symbol == ';';
+            }), value.end());
+
+            return value;
+        }
 };
 
 inline Response text(std::string body, int status = 200) {

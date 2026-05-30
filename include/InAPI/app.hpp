@@ -119,6 +119,10 @@ class App {
                 res.set_header(header.first, header.second);
             }
 
+            for (const auto& cookie : response.cookie_headers) {
+                res.headers.emplace("Set-Cookie", cookie);
+            }
+
             res.set_content(response.body, response.content_type);
         }
 
@@ -265,14 +269,14 @@ class App {
         }
 
         static void static_cache_headers(Response& response, const std::string& etag, const std::string& last_modified) {
-            response.headers["Cache-Control"] = "public, max-age=3600";
+            response.header("Cache-Control", "public, max-age=3600");
 
             if (!etag.empty()) {
-                response.headers["ETag"] = etag;
+                response.header("ETag", etag);
             }
 
             if (!last_modified.empty()) {
-                response.headers["Last-Modified"] = last_modified;
+                response.header("Last-Modified", last_modified);
             }
         }
 
@@ -359,14 +363,14 @@ class App {
             std::string origin = request.header("Origin");
 
             if (contains(options.origins, "*")) {
-                response.headers["Access-Control-Allow-Origin"] = "*";
+                response.header("Access-Control-Allow-Origin", "*");
             } else if (!origin.empty() && contains(options.origins, origin)) {
-                response.headers["Access-Control-Allow-Origin"] = origin;
-                response.headers["Vary"] = "Origin";
+                response.header("Access-Control-Allow-Origin", origin);
+                response.header("Vary", "Origin");
             }
 
-            response.headers["Access-Control-Allow-Methods"] = join(options.methods);
-            response.headers["Access-Control-Allow-Headers"] = join(options.headers);
+            response.header("Access-Control-Allow-Methods", join(options.methods));
+            response.header("Access-Control-Allow-Headers", join(options.headers));
         }
 
         static void log_request(const Request& request, const Response& response) {
@@ -480,7 +484,7 @@ class App {
 
         void BearerAuth(const std::string& token) {
             BearerAuth([token](Request request) {
-                return request.header("Authorization") == "Bearer " + token;
+                return request.bearer_token() == token;
             });
         }
 
@@ -488,7 +492,7 @@ class App {
             middleware([hook = std::move(hook)](Request request, Next next) {
                 if (!hook(request)) {
                     Response response = error(401);
-                    response.headers["WWW-Authenticate"] = "Bearer";
+                    response.header("WWW-Authenticate", "Bearer");
                     return response;
                 }
 
@@ -519,7 +523,7 @@ class App {
             });
         }
 
-        void files(const std::string& mount, const std::string& directory) {
+        void mount(const std::string& mount, const std::string& directory) {
             std::string normalized_mount = normalize_mount(mount);
             std::string pattern = static_route_pattern(normalized_mount);
             std::filesystem::path root = std::filesystem::path(directory);
