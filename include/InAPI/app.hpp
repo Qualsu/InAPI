@@ -23,6 +23,8 @@
 #include <middleware.hpp>
 #include <request.hpp>
 #include <response.hpp>
+#include <route.hpp>
+#include <router.hpp>
 #include <json.hpp>
 
 class App {
@@ -39,78 +41,6 @@ class App {
         bool cors_enabled = false;
         bool logger_enabled = true;
         httplib::Server server;
-
-        struct Route {
-            std::string path;
-            std::vector<std::string> params;
-        };
-
-        static bool regex_special(char symbol) {
-            static const std::string special = R"(\.^$|()[]{}*+?)";
-            return special.find(symbol) != std::string::npos;
-        }
-
-        static std::string param_pattern(const std::string& type) {
-            if (type == "int") {
-                return R"((-?[0-9]+))";
-            }
-
-            if (type == "path") {
-                return R"((.+))";
-            }
-
-            return R"(([^/]+))";
-        }
-
-        static Route route_path(const std::string& path) {
-            Route route;
-            route.path.reserve(path.size() + 8);
-
-            for (size_t i = 0; i < path.size(); ++i) {
-                if (path[i] != '{') {
-                    if (regex_special(path[i])) {
-                        route.path += '\\';
-                    }
-
-                    route.path += path[i];
-                    continue;
-                }
-
-                size_t close = path.find('}', i + 1);
-
-                if (close == std::string::npos) {
-                    route.path += "\\{";
-                    continue;
-                }
-
-                std::string token = path.substr(i + 1, close - i - 1);
-                size_t type_start = token.find(':');
-                std::string name = type_start == std::string::npos ? token : token.substr(0, type_start);
-                std::string type = type_start == std::string::npos ? "string" : token.substr(type_start + 1);
-
-                route.params.push_back(name);
-                route.path += param_pattern(type);
-                i = close;
-            }
-
-            return route;
-        }
-
-        static std::unordered_map<std::string, std::string> route_params(const Route& route, const httplib::Request& req) {
-            std::unordered_map<std::string, std::string> params;
-
-            for (size_t i = 0; i < route.params.size(); ++i) {
-                size_t match_index = i + 1;
-
-                if (match_index >= req.matches.size()) {
-                    break;
-                }
-
-                params.emplace(route.params[i], req.matches[match_index].str());
-            }
-
-            return params;
-        }
 
         static void send(Response response, httplib::Response& res) {
             res.status = response.status;
@@ -147,7 +77,7 @@ class App {
             pattern.reserve(mount.size() + 8);
 
             for (char symbol : mount) {
-                if (regex_special(symbol)) {
+                if (route_regex_special(symbol)) {
                     pattern += '\\';
                 }
 
@@ -172,6 +102,18 @@ class App {
 
             std::string relative = request_path.substr(mount.size());
             return relative.empty() ? "/" : relative;
+        }
+
+        static std::string join_route_path(const std::string& prefix, const std::string& path) {
+            if (path.empty() || path == "/") {
+                return prefix;
+            }
+
+            if (prefix == "/") {
+                return path.front() == '/' ? path : "/" + path;
+            }
+
+            return path.front() == '/' ? prefix + path : prefix + "/" + path;
         }
 
         static bool safe_static_path(const std::string& path) {
@@ -388,16 +330,26 @@ class App {
         }
 
         Response handle(Request request, Handler handler) const {
-            auto next = std::make_shared<Next>();
-            size_t index = 0;
+            return handle(std::move(request), std::move(handler), {});
+        }
 
-            *next = [this, handler = std::move(handler), next, index](Request current) mutable -> Response {
-                if (index >= middlewares.size()) {
-                    return handler(current);
+        Response handle(Request request, Handler handler, std::vector<Middleware> route_middlewares) const {
+            auto next = std::make_shared<Next>();
+            size_t app_index = 0;
+            size_t route_index = 0;
+
+            *next = [this, handler = std::move(handler), route_middlewares = std::move(route_middlewares), next, app_index, route_index](Request current) mutable -> Response {
+                if (app_index < middlewares.size()) {
+                    Middleware current_middleware = middlewares[app_index++];
+                    return current_middleware(current, *next);
                 }
 
-                Middleware current_middleware = middlewares[index++];
-                return current_middleware(current, *next);
+                if (route_index < route_middlewares.size()) {
+                    Middleware current_middleware = route_middlewares[route_index++];
+                    return current_middleware(current, *next);
+                }
+
+                return handler(current);
             };
 
             Response response = (*next)(request);
@@ -407,6 +359,36 @@ class App {
             }
 
             return response;
+        }
+
+        void register_route(RouteMethod method, const std::string& path, Handler handler, std::vector<Middleware> route_middlewares = {}) {
+            CompiledRoute route = compile_route_path(path);
+
+            auto callback = [this, handler = std::move(handler), route, route_middlewares = std::move(route_middlewares)](const httplib::Request& req, httplib::Response& res) {
+                Request request(req, route_params(route, req));
+                send(handle(request, handler, route_middlewares), res);
+            };
+
+            switch (method) {
+                case RouteMethod::Get:
+                    server.Get(route.path, callback);
+                    break;
+                case RouteMethod::Post:
+                    server.Post(route.path, callback);
+                    break;
+                case RouteMethod::Put:
+                    server.Put(route.path, callback);
+                    break;
+                case RouteMethod::Patch:
+                    server.Patch(route.path, callback);
+                    break;
+                case RouteMethod::Delete:
+                    server.Delete(route.path, callback);
+                    break;
+                case RouteMethod::Options:
+                    server.Options(route.path, callback);
+                    break;
+            }
         }
 
     public:
@@ -581,93 +563,72 @@ class App {
             });
         }
 
+        void include(const std::string& prefix, const Router& router) {
+            std::string normalized_prefix = normalize_mount(prefix);
+            std::vector<Middleware> router_middlewares = router.middlewares();
+
+            for (const auto& route : router.routes()) {
+                register_route(route.method, join_route_path(normalized_prefix, route.path), route.handler, router_middlewares);
+            }
+        }
+
         void get(const std::string& path, Handler handler) {
-            Route route = route_path(path);
-            server.Get(route.path, [this, handler, route](const httplib::Request& req, httplib::Response& res) {
-                send(handle(Request(req, route_params(route, req)), handler), res);
-            });
+            register_route(RouteMethod::Get, path, std::move(handler));
         }
 
         void get(const std::string& path, SimpleHandler handler) {
-            server.Get(route_path(path).path, [this, handler](const httplib::Request& req, httplib::Response& res) {
-                send(handle(Request(req), [handler](Request) {
-                    return handler();
-                }), res);
+            get(path, [handler = std::move(handler)](Request) {
+                return handler();
             });
         }
 
         void post(const std::string& path, Handler handler) {
-            Route route = route_path(path);
-            server.Post(route.path, [this, handler, route](const httplib::Request& req, httplib::Response& res) {
-                send(handle(Request(req, route_params(route, req)), handler), res);
-            });
+            register_route(RouteMethod::Post, path, std::move(handler));
         }
 
         void post(const std::string& path, SimpleHandler handler) {
-            server.Post(route_path(path).path, [this, handler](const httplib::Request& req, httplib::Response& res) {
-                send(handle(Request(req), [handler](Request) {
-                    return handler();
-                }), res);
+            post(path, [handler = std::move(handler)](Request) {
+                return handler();
             });
         }
 
         void put(const std::string& path, Handler handler) {
-            Route route = route_path(path);
-            server.Put(route.path, [this, handler, route](const httplib::Request& req, httplib::Response& res) {
-                send(handle(Request(req, route_params(route, req)), handler), res);
-            });
+            register_route(RouteMethod::Put, path, std::move(handler));
         }
 
         void put(const std::string& path, SimpleHandler handler) {
-            server.Put(route_path(path).path, [this, handler](const httplib::Request& req, httplib::Response& res) {
-                send(handle(Request(req), [handler](Request) {
-                    return handler();
-                }), res);
+            put(path, [handler = std::move(handler)](Request) {
+                return handler();
             });
         }
 
         void patch(const std::string& path, Handler handler) {
-            Route route = route_path(path);
-            server.Patch(route.path, [this, handler, route](const httplib::Request& req, httplib::Response& res) {
-                send(handle(Request(req, route_params(route, req)), handler), res);
-            });
+            register_route(RouteMethod::Patch, path, std::move(handler));
         }
 
         void patch(const std::string& path, SimpleHandler handler) {
-            server.Patch(route_path(path).path, [this, handler](const httplib::Request& req, httplib::Response& res) {
-                send(handle(Request(req), [handler](Request) {
-                    return handler();
-                }), res);
+            patch(path, [handler = std::move(handler)](Request) {
+                return handler();
             });
         }
 
         void del(const std::string& path, Handler handler) {
-            Route route = route_path(path);
-            server.Delete(route.path, [this, handler, route](const httplib::Request& req, httplib::Response& res) {
-                send(handle(Request(req, route_params(route, req)), handler), res);
-            });
+            register_route(RouteMethod::Delete, path, std::move(handler));
         }
 
         void del(const std::string& path, SimpleHandler handler) {
-            server.Delete(route_path(path).path, [this, handler](const httplib::Request& req, httplib::Response& res) {
-                send(handle(Request(req), [handler](Request) {
-                    return handler();
-                }), res);
+            del(path, [handler = std::move(handler)](Request) {
+                return handler();
             });
         }
 
         void options(const std::string& path, Handler handler) {
-            Route route = route_path(path);
-            server.Options(route.path, [this, handler, route](const httplib::Request& req, httplib::Response& res) {
-                send(handle(Request(req, route_params(route, req)), handler), res);
-            });
+            register_route(RouteMethod::Options, path, std::move(handler));
         }
 
         void options(const std::string& path, SimpleHandler handler) {
-            server.Options(route_path(path).path, [this, handler](const httplib::Request& req, httplib::Response& res) {
-                send(handle(Request(req), [handler](Request) {
-                    return handler();
-                }), res);
+            options(path, [handler = std::move(handler)](Request) {
+                return handler();
             });
         }
 
