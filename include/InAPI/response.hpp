@@ -9,6 +9,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <encoding.hpp>
 #include <json.hpp>
 
 struct Response {
@@ -164,7 +165,7 @@ inline std::string file_content_type(const std::string& path) {
 }
 
 inline Response file(std::string path, int status = 200) {
-    std::ifstream stream(path, std::ios::binary);
+    std::ifstream stream(InAPIEncoding::path_from_utf8(path), std::ios::binary);
 
     if (!stream) {
         return Response(404, "File not found", "text/plain; charset=utf-8");

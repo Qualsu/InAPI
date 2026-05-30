@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <encoding.hpp>
 
 struct BasicAuth {
     std::string username;
@@ -47,7 +48,7 @@ class UploadedFile {
         }
 
         bool save(const std::string& path) const {
-            std::filesystem::path target(path);
+            std::filesystem::path target = InAPIEncoding::path_from_utf8(path);
             std::filesystem::path parent = target.parent_path();
 
             if (!parent.empty()) {
@@ -461,6 +462,14 @@ class Request {
 
         std::string ip() const {
             return request.remote_addr;
+        }
+
+        int port() const {
+            return request.remote_port;
+        }
+
+        std::string http_version() const {
+            return request.version;
         }
 };
 

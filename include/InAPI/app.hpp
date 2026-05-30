@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 #include <config.hpp>
+#include <encoding.hpp>
 #include <error.hpp>
 #include <middleware.hpp>
 #include <request.hpp>
@@ -28,6 +29,7 @@
 #include <router.hpp>
 #include <validation.hpp>
 #include <json.hpp>
+#include <logger.hpp>
 
 class App {
     public:
@@ -280,30 +282,6 @@ class App {
             return false;
         }
 
-        static std::string reason_phrase(int status) {
-            switch (status) {
-                case 200: return "OK";
-                case 201: return "Created";
-                case 202: return "Accepted";
-                case 204: return "No Content";
-                case 301: return "Moved Permanently";
-                case 302: return "Found";
-                case 304: return "Not Modified";
-                case 400: return "Bad Request";
-                case 401: return "Unauthorized";
-                case 403: return "Forbidden";
-                case 404: return "Not Found";
-                case 405: return "Method Not Allowed";
-                case 409: return "Conflict";
-                case 413: return "Payload Too Large";
-                case 422: return "Unprocessable Entity";
-                case 500: return "Internal Server Error";
-                case 502: return "Bad Gateway";
-                case 503: return "Service Unavailable";
-                default: return "";
-            }
-        }
-
         static void apply_cors_headers(Response& response, const CorsOptions& options, const Request& request) {
             std::string origin = request.header("Origin");
 
@@ -319,17 +297,7 @@ class App {
         }
 
         static void log_request(const Request& request, const Response& response) {
-            std::cout << "INFO: " << request.ip()
-                      << " - \"" << request.method() << " " << request.path() << "\" "
-                      << response.status;
-
-            std::string reason = reason_phrase(response.status);
-
-            if (!reason.empty()) {
-                std::cout << " " << reason;
-            }
-
-            std::cout << "\n";
+            InAPILogger::request(request, response);
         }
 
         void apply_config(const Config& config) {
@@ -531,7 +499,7 @@ class App {
         void mount(const std::string& mount, const std::string& directory) {
             std::string normalized_mount = normalize_mount(mount);
             std::string pattern = static_route_pattern(normalized_mount);
-            std::filesystem::path root = std::filesystem::path(directory);
+            std::filesystem::path root = InAPIEncoding::path_from_utf8(directory);
 
             server.Get(pattern, [this, normalized_mount, root](const httplib::Request& req, httplib::Response& res) {
                 Request request(req);
@@ -558,7 +526,7 @@ class App {
                         relative.erase(relative.begin());
                     }
 
-                    std::filesystem::path requested = relative.empty() ? base : base / std::filesystem::path(relative);
+                    std::filesystem::path requested = relative.empty() ? base : base / InAPIEncoding::path_from_utf8(relative);
                     std::filesystem::path target = requested;
 
                     if (std::filesystem::is_directory(target, error)) {
@@ -664,17 +632,10 @@ class App {
         }
 
         void run(const std::string& host, int port, Config config = Config()) {
+            InAPIEncoding::setup_utf8_console();
             apply_config(config);
             std::string url_host = host == "0.0.0.0" ? "127.0.0.1" : host;
-
-            std::cout << "INFO: InAPI running on http://" << url_host << ":" << port;
-
-            if (url_host != host) {
-                std::cout << " (bound to " << host << ")";
-            }
-
-            std::cout << "\n";
-            std::cout << "INFO: Press CTRL+C to quit\n";
+            InAPILogger::startup(url_host, port, host);
 
             server.listen(host, port);
         }
