@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <config.hpp>
 #include <error.hpp>
 #include <middleware.hpp>
 #include <request.hpp>
@@ -294,6 +295,7 @@ class App {
                 case 404: return "Not Found";
                 case 405: return "Method Not Allowed";
                 case 409: return "Conflict";
+                case 413: return "Payload Too Large";
                 case 422: return "Unprocessable Entity";
                 case 500: return "Internal Server Error";
                 case 502: return "Bad Gateway";
@@ -328,6 +330,19 @@ class App {
             }
 
             std::cout << "\n";
+        }
+
+        void apply_config(const Config& config) {
+            logger_enabled = config.logger;
+
+            server.new_task_queue = [threads = config.threads] {
+                return new httplib::ThreadPool(static_cast<std::size_t>(threads));
+            };
+
+            server.set_payload_max_length(max_body_size_bytes(config.max_body_size));
+            server.set_read_timeout(static_cast<time_t>(config.read_timeout_seconds));
+            server.set_write_timeout(static_cast<time_t>(config.write_timeout_seconds));
+            server.set_keep_alive_timeout(static_cast<time_t>(config.idle_timeout_seconds));
         }
 
         Response handle(Request request, Handler handler) const {
@@ -640,12 +655,16 @@ class App {
             });
         }
 
-        void run(int port, bool logger) {
-            run(port, "0.0.0.0", logger);
+        void run(int port, Config config = Config()) {
+            run("0.0.0.0", port, std::move(config));
         }
 
-        void run(int port, const std::string& host = "0.0.0.0", bool logger = true) {
-            logger_enabled = logger;
+        void run(int port, const std::string& host, Config config = Config()) {
+            run(host, port, std::move(config));
+        }
+
+        void run(const std::string& host, int port, Config config = Config()) {
+            apply_config(config);
             std::string url_host = host == "0.0.0.0" ? "127.0.0.1" : host;
 
             std::cout << "INFO: InAPI running on http://" << url_host << ":" << port;

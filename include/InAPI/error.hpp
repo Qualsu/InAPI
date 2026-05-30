@@ -14,6 +14,7 @@ inline std::string error_message(int status) {
         case 404: return "Not found";
         case 405: return "Method not allowed";
         case 409: return "Conflict";
+        case 413: return "Payload too large";
         case 422: return "Unprocessable entity";
         case 500: return "Internal server error";
         case 502: return "Bad gateway";
