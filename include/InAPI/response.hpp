@@ -72,14 +72,26 @@ inline std::string file_content_type(const std::string& path) {
     if (extension == "txt") return "text/plain; charset=utf-8";
     if (extension == "css") return "text/css; charset=utf-8";
     if (extension == "js") return "application/javascript";
+    if (extension == "mjs") return "application/javascript";
     if (extension == "json") return "application/json";
+    if (extension == "xml") return "application/xml";
     if (extension == "png") return "image/png";
     if (extension == "jpg" || extension == "jpeg") return "image/jpeg";
     if (extension == "gif") return "image/gif";
     if (extension == "svg") return "image/svg+xml";
     if (extension == "webp") return "image/webp";
+    if (extension == "avif") return "image/avif";
     if (extension == "ico") return "image/x-icon";
     if (extension == "pdf") return "application/pdf";
+    if (extension == "wasm") return "application/wasm";
+    if (extension == "woff") return "font/woff";
+    if (extension == "woff2") return "font/woff2";
+    if (extension == "ttf") return "font/ttf";
+    if (extension == "otf") return "font/otf";
+    if (extension == "mp4") return "video/mp4";
+    if (extension == "webm") return "video/webm";
+    if (extension == "mp3") return "audio/mpeg";
+    if (extension == "wav") return "audio/wav";
 
     return "application/octet-stream";
 }
