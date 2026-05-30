@@ -1,0 +1,9 @@
+*.h
+*.exe
+/src/build
+*.cpp
+!main.cpp
+.vscode/*.json
+!.vscode/tasks.json
+_release
+_archive
