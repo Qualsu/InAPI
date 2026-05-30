@@ -3,16 +3,23 @@
 
 #include <httplib.h>
 #include <json.hpp>
+#include <validation.hpp>
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+struct BasicAuth {
+    std::string username;
+    std::string password;
+};
 
 class UploadedFile {
     public:
@@ -117,6 +124,71 @@ class Request {
             return value;
         }
 
+        static int base64_value(char symbol) {
+            if (symbol >= 'A' && symbol <= 'Z') return symbol - 'A';
+            if (symbol >= 'a' && symbol <= 'z') return symbol - 'a' + 26;
+            if (symbol >= '0' && symbol <= '9') return symbol - '0' + 52;
+            if (symbol == '+') return 62;
+            if (symbol == '/') return 63;
+            return -1;
+        }
+
+        static std::optional<std::string> base64_decode(const std::string& value) {
+            std::string result;
+            int buffer = 0;
+            int bits = -8;
+            bool padding = false;
+
+            for (char symbol : value) {
+                if (std::isspace(static_cast<unsigned char>(symbol))) {
+                    continue;
+                }
+
+                if (symbol == '=') {
+                    padding = true;
+                    continue;
+                }
+
+                if (padding) {
+                    return std::nullopt;
+                }
+
+                int decoded = base64_value(symbol);
+
+                if (decoded < 0) {
+                    return std::nullopt;
+                }
+
+                buffer = (buffer << 6) + decoded;
+                bits += 6;
+
+                if (bits >= 0) {
+                    result.push_back(static_cast<char>((buffer >> bits) & 0xFF));
+                    bits -= 8;
+                }
+            }
+
+            return result;
+        }
+
+        static bool auth_scheme_matches(const std::string& authorization, const std::string& scheme) {
+            if (authorization.size() <= scheme.size()) {
+                return false;
+            }
+
+            std::string actual = authorization.substr(0, scheme.size());
+            std::transform(actual.begin(), actual.end(), actual.begin(), [](unsigned char symbol) {
+                return static_cast<char>(std::tolower(symbol));
+            });
+
+            std::string expected = scheme;
+            std::transform(expected.begin(), expected.end(), expected.begin(), [](unsigned char symbol) {
+                return static_cast<char>(std::tolower(symbol));
+            });
+
+            return actual == expected && std::isspace(static_cast<unsigned char>(authorization[scheme.size()]));
+        }
+
     public:
         explicit Request(const httplib::Request& request)
             : request(request) {}
@@ -140,27 +212,54 @@ class Request {
             return nlohmann::json::parse(request.body);
         }
 
+        nlohmann::json body(const ValidationSchema& schema) const {
+            try {
+                return validate_schema(json(), schema);
+            } catch (const nlohmann::json::parse_error&) {
+                throw ValidationException({{"", "invalid_json", "Invalid JSON body"}});
+            }
+        }
+
         std::string header(const std::string& name) const {
             return request.get_header_value(name);
         }
 
-        std::string bearer_token() const {
+        std::optional<std::string> bearer_token() const {
             std::string authorization = header("Authorization");
 
-            if (authorization.size() < 7) {
-                return "";
+            if (!auth_scheme_matches(authorization, "Bearer")) {
+                return std::nullopt;
             }
 
-            std::string scheme = authorization.substr(0, 6);
-            std::transform(scheme.begin(), scheme.end(), scheme.begin(), [](unsigned char symbol) {
-                return static_cast<char>(std::tolower(symbol));
-            });
+            std::string token = trim(authorization.substr(7));
 
-            if (scheme != "bearer" || !std::isspace(static_cast<unsigned char>(authorization[6]))) {
-                return "";
+            if (token.empty()) {
+                return std::nullopt;
             }
 
-            return trim(authorization.substr(7));
+            return token;
+        }
+
+        std::optional<BasicAuth> basic_auth() const {
+            std::string authorization = header("Authorization");
+
+            if (!auth_scheme_matches(authorization, "Basic")) {
+                return std::nullopt;
+            }
+
+            std::optional<std::string> decoded = base64_decode(trim(authorization.substr(6)));
+
+            if (!decoded) {
+                return std::nullopt;
+            }
+
+            size_t separator = decoded->find(':');
+
+            if (separator == std::string::npos) {
+                return std::nullopt;
+            }
+
+            return BasicAuth{decoded->substr(0, separator), decoded->substr(separator + 1)};
         }
 
         std::string content_type() const {
@@ -219,6 +318,18 @@ class Request {
 
         std::string query(const std::string& name) const {
             return request.get_param_value(name);
+        }
+
+        nlohmann::json query(const ValidationSchema& schema) const {
+            nlohmann::json source = nlohmann::json::object();
+
+            for (const auto& field : schema.fields) {
+                if (request.has_param(field.name)) {
+                    source[field.name] = request.get_param_value(field.name);
+                }
+            }
+
+            return validate_schema(source, schema);
         }
 
         std::string form(const std::string& name) const {
@@ -330,6 +441,18 @@ class Request {
 
         bool has_param(const std::string& name) const {
             return route_params.find(name) != route_params.end() || request.path_params.find(name) != request.path_params.end();
+        }
+
+        nlohmann::json params(const ValidationSchema& schema) const {
+            nlohmann::json source = nlohmann::json::object();
+
+            for (const auto& field : schema.fields) {
+                if (has_param(field.name)) {
+                    source[field.name] = param(field.name);
+                }
+            }
+
+            return validate_schema(source, schema);
         }
 
         bool has_header(const std::string& name) const {

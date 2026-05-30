@@ -25,6 +25,7 @@
 #include <response.hpp>
 #include <route.hpp>
 #include <router.hpp>
+#include <validation.hpp>
 #include <json.hpp>
 
 class App {
@@ -352,7 +353,13 @@ class App {
                 return handler(current);
             };
 
-            Response response = (*next)(request);
+            Response response;
+
+            try {
+                response = (*next)(request);
+            } catch (const ValidationException& exception) {
+                response = json(validation_error_json(exception.details()), 422);
+            }
 
             if (logger_enabled) {
                 log_request(request, response);
@@ -466,7 +473,8 @@ class App {
 
         void BearerAuth(const std::string& token) {
             BearerAuth([token](Request request) {
-                return request.bearer_token() == token;
+                auto bearer = request.bearer_token();
+                return bearer && *bearer == token;
             });
         }
 

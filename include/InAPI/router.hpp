@@ -53,7 +53,8 @@ class Router {
 
         void BearerAuth(const std::string& token) {
             BearerAuth([token](Request request) {
-                return request.bearer_token() == token;
+                auto bearer = request.bearer_token();
+                return bearer && *bearer == token;
             });
         }
 
