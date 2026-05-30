@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -39,12 +40,28 @@ class App {
         using ExceptionHandler = std::function<Response(const std::exception&)>;
 
     private:
+        struct RegisteredRoute {
+            RouteMethod method;
+            std::string path;
+            Handler handler;
+            std::vector<Middleware> middlewares;
+        };
+
+        struct RegisteredMount {
+            std::string mount;
+            std::string directory;
+        };
+
         std::unordered_map<int, std::function<Response(Request)>> error_handlers;
+        std::vector<RegisteredRoute> routes;
+        std::vector<RegisteredMount> mounts;
         std::vector<Middleware> middlewares;
         CorsOptions cors_options;
         bool cors_enabled = false;
+        bool exception_handler_enabled = false;
         bool logger_enabled = true;
-        httplib::Server server;
+        ExceptionHandler exception_handler_callback;
+        std::unique_ptr<httplib::Server> server;
 
         static void send(Response response, httplib::Response& res) {
             res.status = response.status;
@@ -300,90 +317,8 @@ class App {
             InAPILogger::request(request, response);
         }
 
-        void apply_config(const Config& config) {
-            logger_enabled = config.logger;
-
-            server.new_task_queue = [threads = config.threads] {
-                return new httplib::ThreadPool(static_cast<std::size_t>(threads));
-            };
-
-            server.set_payload_max_length(max_body_size_bytes(config.max_body_size));
-            server.set_read_timeout(static_cast<time_t>(config.read_timeout_seconds));
-            server.set_write_timeout(static_cast<time_t>(config.write_timeout_seconds));
-            server.set_keep_alive_timeout(static_cast<time_t>(config.idle_timeout_seconds));
-        }
-
-        Response handle(Request request, Handler handler) const {
-            return handle(std::move(request), std::move(handler), {});
-        }
-
-        Response handle(Request request, Handler handler, std::vector<Middleware> route_middlewares) const {
-            auto next = std::make_shared<Next>();
-            size_t app_index = 0;
-            size_t route_index = 0;
-
-            *next = [this, handler = std::move(handler), route_middlewares = std::move(route_middlewares), next, app_index, route_index](Request current) mutable -> Response {
-                if (app_index < middlewares.size()) {
-                    Middleware current_middleware = middlewares[app_index++];
-                    return current_middleware(current, *next);
-                }
-
-                if (route_index < route_middlewares.size()) {
-                    Middleware current_middleware = route_middlewares[route_index++];
-                    return current_middleware(current, *next);
-                }
-
-                return handler(current);
-            };
-
-            Response response;
-
-            try {
-                response = (*next)(request);
-            } catch (const ValidationException& exception) {
-                response = json(validation_error_json(exception.details()), 422);
-            }
-
-            if (logger_enabled) {
-                log_request(request, response);
-            }
-
-            return response;
-        }
-
-        void register_route(RouteMethod method, const std::string& path, Handler handler, std::vector<Middleware> route_middlewares = {}) {
-            CompiledRoute route = compile_route_path(path);
-
-            auto callback = [this, handler = std::move(handler), route, route_middlewares = std::move(route_middlewares)](const httplib::Request& req, httplib::Response& res) {
-                Request request(req, route_params(route, req));
-                send(handle(request, handler, route_middlewares), res);
-            };
-
-            switch (method) {
-                case RouteMethod::Get:
-                    server.Get(route.path, callback);
-                    break;
-                case RouteMethod::Post:
-                    server.Post(route.path, callback);
-                    break;
-                case RouteMethod::Put:
-                    server.Put(route.path, callback);
-                    break;
-                case RouteMethod::Patch:
-                    server.Patch(route.path, callback);
-                    break;
-                case RouteMethod::Delete:
-                    server.Delete(route.path, callback);
-                    break;
-                case RouteMethod::Options:
-                    server.Options(route.path, callback);
-                    break;
-            }
-        }
-
-    public:
-        App() {
-            server.set_error_handler([this](const httplib::Request& req, httplib::Response& res) {
+        void set_error_handler() {
+            server->set_error_handler([this](const httplib::Request& req, httplib::Response& res) {
                 if (!res.body.empty()) {
                     return httplib::Server::HandlerResponse::Unhandled;
                 }
@@ -414,67 +349,36 @@ class App {
             });
         }
 
-        void error_handler(int status, ErrorHandler handler) {
-            error_handlers[status] = std::move(handler);
-        }
-
-        void middleware(Middleware handler) {
-            middlewares.push_back(std::move(handler));
-        }
-
-        void Cors(CorsOptions options = {}) {
-            cors_options = std::move(options);
-
+        void set_cors_handler() {
             if (!cors_enabled) {
-                cors_enabled = true;
-
-                server.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
-                    if (req.method != "OPTIONS") {
-                        return httplib::Server::HandlerResponse::Unhandled;
-                    }
-
-                    Response response = status(204);
-                    Request request(req);
-                    apply_cors_headers(response, cors_options, request);
-
-                    if (logger_enabled) {
-                        log_request(request, response);
-                    }
-
-                    send(response, res);
-
-                    return httplib::Server::HandlerResponse::Handled;
-                });
-
-                middleware([this](Request request, Next next) {
-                    Response response = next(request);
-                    apply_cors_headers(response, cors_options, request);
-                    return response;
-                });
+                return;
             }
-        }
 
-        void BearerAuth(const std::string& token) {
-            BearerAuth([token](Request request) {
-                auto bearer = request.bearer_token();
-                return bearer && *bearer == token;
-            });
-        }
-
-        void BearerAuth(AuthHook hook) {
-            middleware([hook = std::move(hook)](Request request, Next next) {
-                if (!hook(request)) {
-                    Response response = error(401);
-                    response.header("WWW-Authenticate", "Bearer");
-                    return response;
+            server->set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
+                if (req.method != "OPTIONS") {
+                    return httplib::Server::HandlerResponse::Unhandled;
                 }
 
-                return next(request);
+                Response response = status(204);
+                Request request(req);
+                apply_cors_headers(response, cors_options, request);
+
+                if (logger_enabled) {
+                    log_request(request, response);
+                }
+
+                send(response, res);
+
+                return httplib::Server::HandlerResponse::Handled;
             });
         }
 
-        void exception_handler(ExceptionHandler handler) {
-            server.set_exception_handler([handler = std::move(handler)](const httplib::Request&, httplib::Response& res, std::exception_ptr ep) {
+        void set_exception_handler() {
+            if (!exception_handler_enabled) {
+                return;
+            }
+
+            server->set_exception_handler([this](const httplib::Request&, httplib::Response& res, std::exception_ptr ep) {
                 if (!ep) {
                     send(error(500), res);
                     return;
@@ -484,7 +388,7 @@ class App {
                     std::rethrow_exception(ep);
                 } catch (const std::exception& exception) {
                     try {
-                        send(handler(exception), res);
+                        send(exception_handler_callback(exception), res);
                     } catch (...) {
                         send(error(500), res);
                     }
@@ -496,12 +400,18 @@ class App {
             });
         }
 
-        void mount(const std::string& mount, const std::string& directory) {
+        void set_server_handlers() {
+            set_error_handler();
+            set_cors_handler();
+            set_exception_handler();
+        }
+
+        void add_mount_to_server(const std::string& mount, const std::string& directory) {
             std::string normalized_mount = normalize_mount(mount);
             std::string pattern = static_route_pattern(normalized_mount);
             std::filesystem::path root = InAPIEncoding::path_from_utf8(directory);
 
-            server.Get(pattern, [this, normalized_mount, root](const httplib::Request& req, httplib::Response& res) {
+            server->Get(pattern, [this, normalized_mount, root](const httplib::Request& req, httplib::Response& res) {
                 Request request(req);
 
                 Response response = handle(request, [normalized_mount, root](Request current) {
@@ -552,6 +462,194 @@ class App {
 
                 send(response, res);
             });
+        }
+
+        void create_plain_server() {
+            server.reset(new httplib::Server());
+            set_server_handlers();
+        }
+
+        void create_server(const Config& config) {
+            if (!config.ssl) {
+                create_plain_server();
+                return;
+            }
+
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+            throw std::runtime_error("SSL is configured, but InAPI was built without CPPHTTPLIB_OPENSSL_SUPPORT. Compile with -DCPPHTTPLIB_OPENSSL_SUPPORT -lssl -lcrypto.");
+#else
+            if (!std::filesystem::is_regular_file(config.ssl->cert_file)) {
+                throw std::runtime_error("SSL certificate file not found: " + config.ssl->cert_file);
+            }
+
+            if (!std::filesystem::is_regular_file(config.ssl->key_file)) {
+                throw std::runtime_error("SSL private key file not found: " + config.ssl->key_file);
+            }
+
+            server.reset(new httplib::SSLServer(config.ssl->cert_file.c_str(), config.ssl->key_file.c_str()));
+
+            if (!server->is_valid()) {
+                throw std::runtime_error("Failed to initialize SSL server with certificate: " + config.ssl->cert_file);
+            }
+
+            set_server_handlers();
+#endif
+        }
+
+        void apply_config(const Config& config) {
+            logger_enabled = config.logger;
+
+            server->new_task_queue = [threads = config.threads] {
+                return new httplib::ThreadPool(static_cast<std::size_t>(threads));
+            };
+
+            server->set_payload_max_length(max_body_size_bytes(config.max_body_size));
+            server->set_read_timeout(static_cast<time_t>(config.read_timeout_seconds));
+            server->set_write_timeout(static_cast<time_t>(config.write_timeout_seconds));
+            server->set_keep_alive_timeout(static_cast<time_t>(config.idle_timeout_seconds));
+        }
+
+        Response handle(Request request, Handler handler) const {
+            return handle(std::move(request), std::move(handler), {});
+        }
+
+        Response handle(Request request, Handler handler, std::vector<Middleware> route_middlewares) const {
+            auto next = std::make_shared<Next>();
+            size_t app_index = 0;
+            size_t route_index = 0;
+
+            *next = [this, handler = std::move(handler), route_middlewares = std::move(route_middlewares), next, app_index, route_index](Request current) mutable -> Response {
+                if (app_index < middlewares.size()) {
+                    Middleware current_middleware = middlewares[app_index++];
+                    return current_middleware(current, *next);
+                }
+
+                if (route_index < route_middlewares.size()) {
+                    Middleware current_middleware = route_middlewares[route_index++];
+                    return current_middleware(current, *next);
+                }
+
+                return handler(current);
+            };
+
+            Response response;
+
+            try {
+                response = (*next)(request);
+            } catch (const ValidationException& exception) {
+                response = json(validation_error_json(exception.details()), 422);
+            }
+
+            if (logger_enabled) {
+                log_request(request, response);
+            }
+
+            return response;
+        }
+
+        void add_route_to_server(const RegisteredRoute& registered_route) {
+            CompiledRoute route = compile_route_path(registered_route.path);
+
+            auto callback = [this, handler = registered_route.handler, route, route_middlewares = registered_route.middlewares](const httplib::Request& req, httplib::Response& res) {
+                Request request(req, route_params(route, req));
+                send(handle(request, handler, route_middlewares), res);
+            };
+
+            switch (registered_route.method) {
+                case RouteMethod::Get:
+                    server->Get(route.path, callback);
+                    break;
+                case RouteMethod::Post:
+                    server->Post(route.path, callback);
+                    break;
+                case RouteMethod::Put:
+                    server->Put(route.path, callback);
+                    break;
+                case RouteMethod::Patch:
+                    server->Patch(route.path, callback);
+                    break;
+                case RouteMethod::Delete:
+                    server->Delete(route.path, callback);
+                    break;
+                case RouteMethod::Options:
+                    server->Options(route.path, callback);
+                    break;
+            }
+        }
+
+        void add_routes_to_server() {
+            for (const auto& route : routes) {
+                add_route_to_server(route);
+            }
+        }
+
+        void add_mounts_to_server() {
+            for (const auto& mount : mounts) {
+                add_mount_to_server(mount.mount, mount.directory);
+            }
+        }
+
+        void register_route(RouteMethod method, const std::string& path, Handler handler, std::vector<Middleware> route_middlewares = {}) {
+            routes.push_back({method, path, std::move(handler), std::move(route_middlewares)});
+            add_route_to_server(routes.back());
+        }
+
+    public:
+        App() {
+            create_plain_server();
+        }
+
+        void error_handler(int status, ErrorHandler handler) {
+            error_handlers[status] = std::move(handler);
+        }
+
+        void middleware(Middleware handler) {
+            middlewares.push_back(std::move(handler));
+        }
+
+        void Cors(CorsOptions options = {}) {
+            cors_options = std::move(options);
+
+            if (!cors_enabled) {
+                cors_enabled = true;
+                set_cors_handler();
+
+                middleware([this](Request request, Next next) {
+                    Response response = next(request);
+                    apply_cors_headers(response, cors_options, request);
+                    return response;
+                });
+            }
+        }
+
+        void BearerAuth(const std::string& token) {
+            BearerAuth([token](Request request) {
+                auto bearer = request.bearer_token();
+                return bearer && *bearer == token;
+            });
+        }
+
+        void BearerAuth(AuthHook hook) {
+            middleware([hook = std::move(hook)](Request request, Next next) {
+                if (!hook(request)) {
+                    Response response = error(401);
+                    response.header("WWW-Authenticate", "Bearer");
+                    return response;
+                }
+
+                return next(request);
+            });
+        }
+
+        void exception_handler(ExceptionHandler handler) {
+            exception_handler_callback = std::move(handler);
+            exception_handler_enabled = true;
+            set_exception_handler();
+        }
+
+        void mount(const std::string& mount, const std::string& directory) {
+            mounts.push_back({mount, directory});
+            add_mount_to_server(mount, directory);
         }
 
         void include(const std::string& prefix, const Router& router) {
@@ -633,11 +731,14 @@ class App {
 
         void run(const std::string& host, int port, Config config = Config()) {
             InAPIEncoding::setup_utf8_console();
+            create_server(config);
+            add_routes_to_server();
+            add_mounts_to_server();
             apply_config(config);
             std::string url_host = host == "0.0.0.0" ? "127.0.0.1" : host;
             InAPILogger::startup(url_host, port, host);
 
-            server.listen(host, port);
+            server->listen(host, port);
         }
 };
 
