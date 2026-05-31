@@ -1,5 +1,5 @@
-#ifndef APP
-#define APP
+#ifndef INAPI_APP
+#define INAPI_APP
 
 #pragma once
 
@@ -31,6 +31,7 @@
 #include <validation.hpp>
 #include <json.hpp>
 #include <logger.hpp>
+#include <openapi.hpp>
 
 class App {
     public:
@@ -45,6 +46,7 @@ class App {
             std::string path;
             Handler handler;
             std::vector<Middleware> middlewares;
+            std::shared_ptr<OpenApiOperation> openapi;
         };
 
         struct RegisteredMount {
@@ -60,6 +62,7 @@ class App {
         bool cors_enabled = false;
         bool exception_handler_enabled = false;
         bool logger_enabled = true;
+        bool bearer_auth_enabled = false;
         ExceptionHandler exception_handler_callback;
         std::unique_ptr<httplib::Server> server;
 
@@ -87,6 +90,11 @@ class App {
             }
 
             return mount;
+        }
+
+        static std::string join_swagger_path(const std::string& path, const std::string& child) {
+            std::string normalized = normalize_mount(path);
+            return normalized == "/" ? "/" + child : normalized + "/" + child;
         }
 
         static std::string static_route_pattern(const std::string& mount) {
@@ -589,9 +597,50 @@ class App {
             }
         }
 
-        void register_route(RouteMethod method, const std::string& path, Handler handler, std::vector<Middleware> route_middlewares = {}) {
-            routes.push_back({method, path, std::move(handler), std::move(route_middlewares)});
+        std::vector<OpenApiRoute> openapi_routes() const {
+            std::vector<OpenApiRoute> result;
+            result.reserve(routes.size());
+
+            for (const auto& route : routes) {
+                result.push_back({route.method, route.path, route.openapi});
+            }
+
+            return result;
+        }
+
+        void add_swagger_to_server(const Swagger& config) {
+            if (!config.enabled) {
+                return;
+            }
+
+            std::string docs_path = normalize_mount(config.path);
+            std::string openapi_path = join_swagger_path(docs_path, "openapi.json");
+
+            server->Get(docs_path, [this, openapi_path](const httplib::Request&, httplib::Response& res) {
+                send(html(swagger_html(openapi_path)), res);
+            });
+
+            server->Get(openapi_path, [this, config](const httplib::Request&, httplib::Response& res) {
+                send(json(openapi_json(openapi_routes(), config)), res);
+            });
+        }
+
+        RouteDoc register_route(RouteMethod method,
+                                const std::string& path,
+                                Handler handler,
+                                std::vector<Middleware> route_middlewares = {},
+                                std::shared_ptr<OpenApiOperation> openapi = nullptr) {
+            if (!openapi) {
+                openapi = std::make_shared<OpenApiOperation>();
+            }
+
+            if (bearer_auth_enabled) {
+                openapi->bearer_auth = true;
+            }
+
+            routes.push_back({method, path, std::move(handler), std::move(route_middlewares), openapi});
             add_route_to_server(routes.back());
+            return RouteDoc(openapi);
         }
 
     public:
@@ -630,6 +679,14 @@ class App {
         }
 
         void BearerAuth(AuthHook hook) {
+            bearer_auth_enabled = true;
+
+            for (auto& route : routes) {
+                if (route.openapi) {
+                    route.openapi->bearer_auth = true;
+                }
+            }
+
             middleware([hook = std::move(hook)](Request request, Next next) {
                 if (!hook(request)) {
                     Response response = error(401);
@@ -657,82 +714,87 @@ class App {
             std::vector<Middleware> router_middlewares = router.middlewares();
 
             for (const auto& route : router.routes()) {
-                register_route(route.method, join_route_path(normalized_prefix, route.path), route.handler, router_middlewares);
+                register_route(route.method, join_route_path(normalized_prefix, route.path), route.handler, router_middlewares, route.openapi);
             }
         }
 
-        void get(const std::string& path, Handler handler) {
-            register_route(RouteMethod::Get, path, std::move(handler));
+        RouteDoc get(const std::string& path, Handler handler) {
+            return register_route(RouteMethod::Get, path, std::move(handler));
         }
 
-        void get(const std::string& path, SimpleHandler handler) {
-            get(path, [handler = std::move(handler)](Request) {
+        RouteDoc get(const std::string& path, SimpleHandler handler) {
+            return get(path, [handler = std::move(handler)](Request) {
                 return handler();
             });
         }
 
-        void post(const std::string& path, Handler handler) {
-            register_route(RouteMethod::Post, path, std::move(handler));
+        RouteDoc post(const std::string& path, Handler handler) {
+            return register_route(RouteMethod::Post, path, std::move(handler));
         }
 
-        void post(const std::string& path, SimpleHandler handler) {
-            post(path, [handler = std::move(handler)](Request) {
+        RouteDoc post(const std::string& path, SimpleHandler handler) {
+            return post(path, [handler = std::move(handler)](Request) {
                 return handler();
             });
         }
 
-        void put(const std::string& path, Handler handler) {
-            register_route(RouteMethod::Put, path, std::move(handler));
+        RouteDoc put(const std::string& path, Handler handler) {
+            return register_route(RouteMethod::Put, path, std::move(handler));
         }
 
-        void put(const std::string& path, SimpleHandler handler) {
-            put(path, [handler = std::move(handler)](Request) {
+        RouteDoc put(const std::string& path, SimpleHandler handler) {
+            return put(path, [handler = std::move(handler)](Request) {
                 return handler();
             });
         }
 
-        void patch(const std::string& path, Handler handler) {
-            register_route(RouteMethod::Patch, path, std::move(handler));
+        RouteDoc patch(const std::string& path, Handler handler) {
+            return register_route(RouteMethod::Patch, path, std::move(handler));
         }
 
-        void patch(const std::string& path, SimpleHandler handler) {
-            patch(path, [handler = std::move(handler)](Request) {
+        RouteDoc patch(const std::string& path, SimpleHandler handler) {
+            return patch(path, [handler = std::move(handler)](Request) {
                 return handler();
             });
         }
 
-        void del(const std::string& path, Handler handler) {
-            register_route(RouteMethod::Delete, path, std::move(handler));
+        RouteDoc del(const std::string& path, Handler handler) {
+            return register_route(RouteMethod::Delete, path, std::move(handler));
         }
 
-        void del(const std::string& path, SimpleHandler handler) {
-            del(path, [handler = std::move(handler)](Request) {
+        RouteDoc del(const std::string& path, SimpleHandler handler) {
+            return del(path, [handler = std::move(handler)](Request) {
                 return handler();
             });
         }
 
-        void options(const std::string& path, Handler handler) {
-            register_route(RouteMethod::Options, path, std::move(handler));
+        RouteDoc options(const std::string& path, Handler handler) {
+            return register_route(RouteMethod::Options, path, std::move(handler));
         }
 
-        void options(const std::string& path, SimpleHandler handler) {
-            options(path, [handler = std::move(handler)](Request) {
+        RouteDoc options(const std::string& path, SimpleHandler handler) {
+            return options(path, [handler = std::move(handler)](Request) {
                 return handler();
             });
         }
 
-        void run(int port, Config config = Config()) {
-            run("0.0.0.0", port, std::move(config));
+        void run(int port, Config config = Config(), Swagger swagger = Swagger()) {
+            run("0.0.0.0", port, std::move(config), std::move(swagger));
         }
 
-        void run(int port, const std::string& host, Config config = Config()) {
-            run(host, port, std::move(config));
+        void run(int port, const std::string& host, Config config = Config(), Swagger swagger = Swagger()) {
+            run(host, port, std::move(config), std::move(swagger));
         }
 
-        void run(const std::string& host, int port, Config config = Config()) {
+        void run(const std::string& host, int port, Config config = Config(), Swagger swagger = Swagger()) {
             InAPIEncoding::setup_utf8_console();
             create_server(config);
             add_routes_to_server();
+            if (bearer_auth_enabled) {
+                swagger.bearer_auth = true;
+            }
+
+            add_swagger_to_server(swagger);
             add_mounts_to_server();
             apply_config(config);
             std::string url_host = host == "0.0.0.0" ? "127.0.0.1" : host;

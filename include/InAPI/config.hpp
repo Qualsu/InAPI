@@ -59,6 +59,19 @@ struct Config {
                  write_timeout_seconds,
                  idle_timeout_seconds,
                  std::move(ssl)) {}
+
+    explicit Config(int threads,
+                    const char* max_body_size,
+                    int read_timeout_seconds = 5,
+                    int write_timeout_seconds = 10,
+                    int idle_timeout_seconds = 30,
+                    std::optional<SSL> ssl = std::nullopt)
+        : Config(threads,
+                 std::string(max_body_size),
+                 read_timeout_seconds,
+                 write_timeout_seconds,
+                 idle_timeout_seconds,
+                 std::move(ssl)) {}
 };
 
 inline std::size_t max_body_size_bytes(std::string value) {

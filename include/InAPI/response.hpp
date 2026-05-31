@@ -1,5 +1,5 @@
-#ifndef RESPONSE
-#define RESPONSE
+#ifndef INAPI_RESPONSE
+#define INAPI_RESPONSE
 
 #include <algorithm>
 #include <cctype>

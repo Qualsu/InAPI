@@ -4,11 +4,13 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 #include <error.hpp>
 #include <middleware.hpp>
+#include <openapi.hpp>
 #include <request.hpp>
 #include <response.hpp>
 #include <route.hpp>
@@ -22,18 +24,23 @@ class Router {
             RouteMethod method;
             std::string path;
             Handler handler;
+            std::shared_ptr<OpenApiOperation> openapi;
         };
 
     private:
         std::vector<Route> router_routes;
         std::vector<Middleware> router_middlewares;
+        bool bearer_auth_enabled = false;
 
-        void add(RouteMethod method, std::string path, Handler handler) {
-            router_routes.push_back({method, std::move(path), std::move(handler)});
+        RouteDoc add(RouteMethod method, std::string path, Handler handler) {
+            auto operation = std::make_shared<OpenApiOperation>();
+            operation->bearer_auth = bearer_auth_enabled;
+            router_routes.push_back({method, std::move(path), std::move(handler), operation});
+            return RouteDoc(operation);
         }
 
-        void add(RouteMethod method, std::string path, SimpleHandler handler) {
-            add(method, std::move(path), [handler = std::move(handler)](Request) {
+        RouteDoc add(RouteMethod method, std::string path, SimpleHandler handler) {
+            return add(method, std::move(path), [handler = std::move(handler)](Request) {
                 return handler();
             });
         }
@@ -59,6 +66,14 @@ class Router {
         }
 
         void BearerAuth(AuthHook hook) {
+            bearer_auth_enabled = true;
+
+            for (auto& route : router_routes) {
+                if (route.openapi) {
+                    route.openapi->bearer_auth = true;
+                }
+            }
+
             middleware([hook = std::move(hook)](Request request, Next next) {
                 if (!hook(request)) {
                     Response response = error(401);
@@ -70,52 +85,52 @@ class Router {
             });
         }
 
-        void get(const std::string& path, Handler handler) {
-            add(RouteMethod::Get, path, std::move(handler));
+        RouteDoc get(const std::string& path, Handler handler) {
+            return add(RouteMethod::Get, path, std::move(handler));
         }
 
-        void get(const std::string& path, SimpleHandler handler) {
-            add(RouteMethod::Get, path, std::move(handler));
+        RouteDoc get(const std::string& path, SimpleHandler handler) {
+            return add(RouteMethod::Get, path, std::move(handler));
         }
 
-        void post(const std::string& path, Handler handler) {
-            add(RouteMethod::Post, path, std::move(handler));
+        RouteDoc post(const std::string& path, Handler handler) {
+            return add(RouteMethod::Post, path, std::move(handler));
         }
 
-        void post(const std::string& path, SimpleHandler handler) {
-            add(RouteMethod::Post, path, std::move(handler));
+        RouteDoc post(const std::string& path, SimpleHandler handler) {
+            return add(RouteMethod::Post, path, std::move(handler));
         }
 
-        void put(const std::string& path, Handler handler) {
-            add(RouteMethod::Put, path, std::move(handler));
+        RouteDoc put(const std::string& path, Handler handler) {
+            return add(RouteMethod::Put, path, std::move(handler));
         }
 
-        void put(const std::string& path, SimpleHandler handler) {
-            add(RouteMethod::Put, path, std::move(handler));
+        RouteDoc put(const std::string& path, SimpleHandler handler) {
+            return add(RouteMethod::Put, path, std::move(handler));
         }
 
-        void patch(const std::string& path, Handler handler) {
-            add(RouteMethod::Patch, path, std::move(handler));
+        RouteDoc patch(const std::string& path, Handler handler) {
+            return add(RouteMethod::Patch, path, std::move(handler));
         }
 
-        void patch(const std::string& path, SimpleHandler handler) {
-            add(RouteMethod::Patch, path, std::move(handler));
+        RouteDoc patch(const std::string& path, SimpleHandler handler) {
+            return add(RouteMethod::Patch, path, std::move(handler));
         }
 
-        void del(const std::string& path, Handler handler) {
-            add(RouteMethod::Delete, path, std::move(handler));
+        RouteDoc del(const std::string& path, Handler handler) {
+            return add(RouteMethod::Delete, path, std::move(handler));
         }
 
-        void del(const std::string& path, SimpleHandler handler) {
-            add(RouteMethod::Delete, path, std::move(handler));
+        RouteDoc del(const std::string& path, SimpleHandler handler) {
+            return add(RouteMethod::Delete, path, std::move(handler));
         }
 
-        void options(const std::string& path, Handler handler) {
-            add(RouteMethod::Options, path, std::move(handler));
+        RouteDoc options(const std::string& path, Handler handler) {
+            return add(RouteMethod::Options, path, std::move(handler));
         }
 
-        void options(const std::string& path, SimpleHandler handler) {
-            add(RouteMethod::Options, path, std::move(handler));
+        RouteDoc options(const std::string& path, SimpleHandler handler) {
+            return add(RouteMethod::Options, path, std::move(handler));
         }
 };
 

@@ -1,5 +1,5 @@
-#ifndef INCLUDES
-#define INCLUDES
+#ifndef INAPI_INCLUDES
+#define INAPI_INCLUDES
 
 #include <app.hpp>
 #include <auth.hpp>
@@ -8,6 +8,7 @@
 #include <json.hpp>
 #include <logger.hpp>
 #include <middleware.hpp>
+#include <openapi.hpp>
 #include <request.hpp>
 #include <response.hpp>
 #include <router.hpp>
