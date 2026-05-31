@@ -1,6 +1,7 @@
 # InAPI Documentation
 
 **InAPI** is a C++ library for building HTTP app with FastAPI-like syntax
+
 Internally `cpp-httplib` and `nlohmann/json` are used
 
 ## Navigation
