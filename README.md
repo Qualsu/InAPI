@@ -8,22 +8,9 @@
 
 Проект использует `cpp-httplib` и `nlohmann/json`
 
-[Документация](DOCUMENTATION.md)
+### [Документация](DOCUMENTATION.md)
 
-
-## Компиляция и запуска приложения
-
-```bash
-make
-```
-
-С SSL
-
-```bash
-make ssl
-```
-
-## Пример сервера на InAPI
+## Пример приложения на InAPI
 
 ```cpp
 #include <InAPI.hpp>

@@ -4,7 +4,7 @@ int main() {
     App app;
 
     app.get("/", [] {
-        return "Hello from InAPI!";
+        return text("Hello from InAPI!");
     });
 
     app.run(8080);
