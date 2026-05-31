@@ -1,8 +1,7 @@
-# InAPI Documentation
+# InAPI Документация
 
-InAPI - C++ библиотека для создания HTTP API. Синтаксис похож на FastAPI: маршруты объявляются коротко, обработчики возвращают `Response`, а JSON работает через `nlohmann/json`.
-
-Внутри используются `cpp-httplib` и `nlohmann/json`.
+**InAPI** - С++ библиотека для создания HTTP приложений с FastAPI-подобным синтаксисом
+Внутри используются `cpp-httplib` и `nlohmann/json`
 
 ## Навигация
 
