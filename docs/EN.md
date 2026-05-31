@@ -63,6 +63,18 @@ Build and run the regular example:
 make
 ```
 
+Build a custom source file instead of `src/main.cpp`:
+
+```sh
+make compile SRC=src/app.cpp
+```
+
+Build and run a custom source file:
+
+```sh
+make SRC=src/app.cpp
+```
+
 Build with OpenSSL without running:
 
 ```sh

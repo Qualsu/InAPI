@@ -1,5 +1,5 @@
 CXX ?= g++
-SRC = src/main.cpp
+SRC ?= src/main.cpp
 BUILD_DIR = build
 TARGET = $(BUILD_DIR)/build$(EXE)
 TARGET_SSL = $(BUILD_DIR)/build_ssl$(EXE)
@@ -14,17 +14,10 @@ ifeq ($(OS),Windows_NT)
 EXE = .exe
 CXXFLAGS += -D _WIN32_WINNT=0x0A00
 LDLIBS += -lws2_32
-ifneq (,$(findstring sh,$(notdir $(SHELL))))
-MKDIR = mkdir -p $(BUILD_DIR)
-REMOVE = rm -f $(BUILD_DIR)/*.exe
-RUN = ./$(TARGET)
-RUN_SSL = ./$(TARGET_SSL)
-else
-MKDIR = if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
-REMOVE = del /Q $(BUILD_DIR)\*.exe 2>NUL
-RUN = $(BUILD_DIR)\build.exe
-RUN_SSL = $(BUILD_DIR)\build_ssl.exe
-endif
+MKDIR = cmd /C if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+REMOVE = cmd /C if exist "$(BUILD_DIR)\build.exe" del /Q "$(BUILD_DIR)\build.exe"
+RUN = $(TARGET)
+RUN_SSL = $(TARGET_SSL)
 else
 EXE =
 MKDIR = mkdir -p $(BUILD_DIR)
@@ -38,20 +31,24 @@ COMPILE_SSL = $(CXX) $(SRC) $(CXXFLAGS) $(SSL_CXXFLAGS) -o $(TARGET_SSL) $(LDFLA
 
 default:
 	$(MKDIR)
+	$(REMOVE)
 	${COMPILE}
 	${RUN}
 
 ssl:
 	$(MKDIR)
+	$(REMOVE)
 	${COMPILE_SSL}
 	${RUN_SSL}
 
 compile:
 	$(MKDIR)
+	$(REMOVE)
 	${COMPILE}
 
 compile_ssl:
 	$(MKDIR)
+	$(REMOVE)
 	${COMPILE_SSL}
 
 run:

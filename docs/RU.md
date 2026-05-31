@@ -63,6 +63,18 @@ make compile
 make
 ```
 
+Сборка своего файла вместо `src/main.cpp`:
+
+```sh
+make compile SRC=src/app.cpp
+```
+
+Сборка и запуск своего файла:
+
+```sh
+make SRC=src/app.cpp
+```
+
 Сборка с OpenSSL без запуска:
 
 ```sh

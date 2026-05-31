@@ -10,6 +10,18 @@ The project uses `cpp-httplib` and `nlohmann/json`.
 
 ### [English documentation](docs/EN.md) / [Russian documentation](docs/RU.md)
 
+## Build
+
+By default, the `makefile` builds `src/main.cpp`. Pass `SRC` to build another file:
+
+```sh
+make compile SRC=src/app.cpp
+```
+
+```sh
+make SRC=src/app.cpp
+```
+
 ## Application Example
 
 ```cpp
